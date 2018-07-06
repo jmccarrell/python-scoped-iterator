@@ -1,0 +1,27 @@
+# ignore generated files from emacs
+.emacs.d/elpa/
+.emacs.d/auto-save-list
+.emacs.d/settings.el
+
+# Compiled Python files
+*.pyc
+
+# terraform state files
+.terraform
+*.tfstate
+*.tfstate.backup
+
+# Folder view configuration files
+.DS_Store
+Desktop.ini
+
+# Thumbnail cache files
+._*
+Thumbs.db
+
+# Files that might appear on external disks
+.Spotlight-V100
+.Trashes
+
+venv
+.pytest*
