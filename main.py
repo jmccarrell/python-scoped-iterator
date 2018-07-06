@@ -1,4 +1,5 @@
 import io
+import uuid
 import pytest
 import more_itertools
 
@@ -60,7 +61,7 @@ class scoped_iterator():
         self.iter = more_itertools.peekable(iterator)
         self.scope = None
         self.scope_dispatch = dispatch_table
-        self.sentinel = '__sentinel__'
+        self.sentinel = str(uuid.uuid4())
 
     def __iter__(self):
         return self
@@ -104,3 +105,37 @@ def test_normal_marker():
         buf.seek(0)
         s = buf.read().rstrip()
         assert s.split('\n') == expected_vals_with_markers()
+
+from collections import namedtuple
+Fixture = namedtuple('Fixture', 'buf iterator expected dispatch_table')
+
+def normal_stream():
+    buf = io.StringIO()
+    def ca_scope_factory(marker):
+        return context_marker(marker, buf)
+    def fl_scope_factory(marker):
+        return context_marker(marker, buf)
+
+    dispatch_table = { 'CA': ca_scope_factory,
+                       'FL': fl_scope_factory }
+    return Fixture(buf, vals(), expected_vals_with_markers(), dispatch_table)
+
+def empty_stream():
+    buf = io.StringIO()
+    return Fixture(buf, [], [], {})
+
+@pytest.fixture
+def fixtures():
+    return list((normal_stream(), empty_stream()))
+
+def test_by_fixtures(fixtures):
+    for fix in fixtures:
+        it = scoped_iterator(fix.iterator,
+                             fix.dispatch_table)
+        for i in it:
+            print(i, file=fix.buf)
+
+        fix.buf.seek(0)
+        s = fix.buf.read().rstrip()
+        actual = s.split('\n') if len(s) > 0 else []
+        assert actual == fix.expected
