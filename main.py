@@ -1,65 +1,39 @@
+import sys
 import io
 import uuid
 import pytest
+import itertools
 import more_itertools
 
+MIN_PYTHON = (3, 6)
+if sys.version_info < MIN_PYTHON:
+    sys.exit('python %s.%s or later required' % MIN_PYTHON)
 
-def vals():
-    for a in (['CA'] * 3):
-        yield a
-    for b in (['FL'] * 2):
-        yield b
-
-def expected_vals_with_markers():
-    expected = list()
-    expected.append(('start_CA'))
-    for c in (['CA'] * 3):
-        expected.append(c)
-    expected.append(('stop_CA'))
-    expected.append(('start_FL'))
-    for c in (['FL'] * 2):
-        expected.append(c)
-    expected.append(('stop_FL'))
-    return expected
-
-def expected_vals():
-    expected = list()
-    for c in (['CA'] * 3):
-        expected.append(c)
-    for c in (['FL'] * 2):
-        expected.append(c)
-    return expected
-
-def test_fixtures():
-    assert list(vals()) == expected_vals()
-
-class context_marker():
+class ContextMarker():
     def __init__(self, val, out):
         self.val = val
         self.out = out
 
     def __enter__(self):
-        print(f'start_{self.val}', file=self.out)
+        self.out.append(f'start_{self.val}')
         return self
 
-    def __exit__(self, execption, value, traceback):
-        print(f'stop_{self.val}', file=self.out)
+    def __exit__(self, exception, value, traceback):
+        self.out.append(f'stop_{self.val}')
         return False
 
 def test_context_marker():
     expected = ['start_z', 'working', 'stop_z']
-    with io.StringIO() as buf:
-        with context_marker('z', buf) as b:
-            print('working', file=buf)
+    buf = []
+    with ContextMarker('z', buf) as b:
+        buf.append('working')
 
-        buf.seek(0)
-        s = buf.read().rstrip()
-        assert s.split('\n') == expected
+    assert buf == expected
 
-class scoped_iterator():
+class ScopedIterator():
     def __init__(self, iterator, dispatch_table):
         self.iter = more_itertools.peekable(iterator)
-        self.scope = None
+        self.scope = self.scope_key = None
         self.scope_dispatch = dispatch_table
         self.sentinel = str(uuid.uuid4())
 
@@ -73,69 +47,96 @@ class scoped_iterator():
             if self.scope is not None:
                 self.scope.__exit__(None, None, None)
                 self.scope = self.scope_key = None
-        elif self.scope is None:
+        elif self.scope is None and i in self.scope_dispatch:
             # start of new scope
-            if i in self.scope_dispatch:
-                self.scope_key = i
-                self.scope = self.scope_dispatch[self.scope_key](self.scope_key)
-                self.scope.__enter__()
+            self.scope_key = i
+            self.scope = self.scope_dispatch[self.scope_key](self.scope_key)
+            self.scope.__enter__()
         elif i != self.scope_key and i in self.scope_dispatch:
             # change in scope
             self.scope.__exit__(None, None, None)
             self.scope_key = i
             self.scope = self.scope_dispatch[self.scope_key](self.scope_key)
             self.scope.__enter__()
+        elif i != self.scope_key and self.scope_key is not None and i not in self.scope_dispatch:
+            # stop scope, but don't start a new one
+            self.scope.__exit__(None, None, None)
+            self.scope = self.scope_key = None
 
         return next(self.iter)
-
-def test_normal_marker():
-    with io.StringIO() as buf:
-        def ca_scope_factory(marker):
-            return context_marker(marker, buf)
-        def fl_scope_factory(marker):
-            return context_marker(marker, buf)
-
-        dispatch_table = { 'CA': ca_scope_factory,
-                           'FL': fl_scope_factory }
-
-        it = scoped_iterator(vals(), dispatch_table)
-        for i in it:
-            print(i, file=buf)
-
-        buf.seek(0)
-        s = buf.read().rstrip()
-        assert s.split('\n') == expected_vals_with_markers()
 
 from collections import namedtuple
 Fixture = namedtuple('Fixture', 'buf iterator expected dispatch_table')
 
-def normal_stream():
-    buf = io.StringIO()
-    def ca_scope_factory(marker):
-        return context_marker(marker, buf)
-    def fl_scope_factory(marker):
-        return context_marker(marker, buf)
-
-    dispatch_table = { 'CA': ca_scope_factory,
-                       'FL': fl_scope_factory }
-    return Fixture(buf, vals(), expected_vals_with_markers(), dispatch_table)
-
 def empty_stream():
-    buf = io.StringIO()
-    return Fixture(buf, [], [], {})
+    return Fixture(list(), [], [], {})
+
+def typical_stream():
+    'typical stream of sorted values, each value with an entry in the dispatch_table.'
+    def expected_vals():
+        return list(itertools.chain('A' * 3, 'B' * 2))
+
+    def vals_iter():
+        for v in expected_vals():
+            yield v
+
+    def expected_vals_with_markers():
+        return list(
+            itertools.chain.from_iterable((('start_A',),
+                                           'A' * 3,
+                                           ('stop_A', 'start_B'),
+                                           'B' * 2,
+                                           ('stop_B',))))
+
+    buf = list()
+    def a_scope_factory(marker):
+        return ContextMarker(marker, buf)
+    def b_scope_factory(marker):
+        return ContextMarker(marker, buf)
+
+    dispatch_table = { 'A': a_scope_factory,
+                       'B': b_scope_factory }
+    return Fixture(buf, vals_iter(), expected_vals_with_markers(), dispatch_table)
+
+def partial_coverage():
+    'a stream where the dispatch_table does not cover all elements'
+    def expected_vals():
+        return list(itertools.chain('B' * 1, 'C' * 3, 'D' * 2, 'E' * 1, 'F' * 2))
+
+    def vals_iter():
+        for v in expected_vals():
+            yield v
+
+    def expected_vals_with_markers():
+        return list(
+            itertools.chain.from_iterable((('B',
+                                            'start_C',),
+                                           'C' * 3,
+                                           ('stop_C',),
+                                           'D' * 2,
+                                           ('start_E', 'E', 'stop_E'),
+                                           'F' * 2)))
+
+    buf = list()
+    def c_scope_factory(marker):
+        return ContextMarker(marker, buf)
+    def e_scope_factory(marker):
+        return ContextMarker(marker, buf)
+
+    dispatch_table = { 'C': c_scope_factory,
+                       'E': e_scope_factory }
+    return Fixture(buf, vals_iter(), expected_vals_with_markers(), dispatch_table)
+
 
 @pytest.fixture
 def fixtures():
-    return list((normal_stream(), empty_stream()))
+    return list((empty_stream(),
+                 typical_stream(),
+                 partial_coverage()))
 
 def test_by_fixtures(fixtures):
     for fix in fixtures:
-        it = scoped_iterator(fix.iterator,
-                             fix.dispatch_table)
-        for i in it:
-            print(i, file=fix.buf)
+        for i in ScopedIterator(fix.iterator, fix.dispatch_table):
+            fix.buf.append(i)
 
-        fix.buf.seek(0)
-        s = fix.buf.read().rstrip()
-        actual = s.split('\n') if len(s) > 0 else []
-        assert actual == fix.expected
+        assert fix.buf == fix.expected
