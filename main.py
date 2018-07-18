@@ -127,12 +127,55 @@ def partial_coverage():
                        'E': e_scope_factory }
     return Fixture(buf, vals_iter(), expected_vals_with_markers(), dispatch_table)
 
+class _test_():
+    'simple class to test out dispatch'
+    def __init__(self, val):
+        self._val = val
+
+    @property
+    def val(self):
+        return self._val
+
+    @val.setter
+    def val(self, new_val):
+        self._val = new_val
+
+    def __str__(self):
+        return str(self._val)
+
+def dispatch_by_class_with_str():
+    'a stream that uses objects defining __str__ as the key to dispatch on.'
+
+    def expected_vals():
+        return list((_test_(42), _test_(64)))
+
+    def vals_iter():
+        for v in expected_vals():
+            # use the printed representation of the class instance for scoping.
+            yield str(v)
+
+    def expected_vals_with_markers():
+        return list(('start_42', '42', 'stop_42', 'start_64', '64', 'stop_64'))
+
+    buf = list()
+    def scope_factory_42(marker):
+        return ContextMarker(marker, buf)
+    def scope_factory_64(marker):
+        return ContextMarker(marker, buf)
+
+    dispatch_table = { '42': scope_factory_42,
+                       '64': scope_factory_64 }
+    return Fixture(buf, vals_iter(), expected_vals_with_markers(), dispatch_table)
+
 
 @pytest.fixture
 def fixtures():
-    return list((empty_stream(),
-                 typical_stream(),
-                 partial_coverage()))
+    return list((
+        empty_stream(),
+        typical_stream(),
+        dispatch_by_class_with_str(),
+        partial_coverage()
+    ))
 
 def test_by_fixtures(fixtures):
     for fix in fixtures:
