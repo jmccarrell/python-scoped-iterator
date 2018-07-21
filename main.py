@@ -143,6 +143,20 @@ class _test_():
     def __str__(self):
         return str(self._val)
 
+    def __eq__(self, other):
+        return self.val == other.val
+
+class _sub_test_(_test_):
+    'test whether subclassing will compare equal'
+    def __init__(self, val):
+        super().__init__(val)
+
+def test_class_eq():
+    'verify eq is working'
+    assert _test_(525) == _test_(525)
+    assert _test_('990R') == _sub_test_('990R')
+
+
 def dispatch_by_class_with_str():
     'a stream that uses objects defining __str__ as the key to dispatch on.'
 
